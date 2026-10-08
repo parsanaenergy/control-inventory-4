@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {once} from 'node:events';
+import {DatabaseSync} from 'node:sqlite';
+import {today,persianDateOf} from '../public/model.mjs';
+const cwd=new URL('../',import.meta.url);
+test('HTTP: authenticated app, atomic commands, export and live database backup',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'rn-http-'));
+ const child=spawn(process.execPath,['server.mjs'],{cwd,env:{...process.env,RAMNOOR_HOST:'127.0.0.1',PORT:'0',RAMNOOR_DB_PATH:path.join(dir,'inventory.sqlite'),RAMNOOR_ACCOUNTS_JSON:'',RAMNOOR_AUTH_USER:'tester',RAMNOOR_AUTH_PASSWORD:'test-only-password',PUBLIC_ORIGIN:'https://inventory.example.test'},stdio:['ignore','pipe','pipe']});
+ t.after(async()=>{if(child.exitCode===null){const ended=once(child,'exit');child.kill();await ended;}await fs.rm(dir,{recursive:true,force:true});});
+ let logs='';child.stderr.on('data',b=>logs+=b);const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Startup timeout '+logs)),10000);child.once('exit',()=>{clearTimeout(timer);reject(new Error(logs));});child.stdout.on('data',b=>{const m=b.toString().match(/http:\/\/[^\s]+/);if(m){clearTimeout(timer);resolve(m[0].replace(/\/$/,''));}});});
+ const auth='Basic '+Buffer.from('tester:test-only-password').toString('base64');const headers={authorization:auth};
+ assert.equal((await fetch(base+'/healthz')).status,200);assert.equal((await fetch(base+'/')).status,401);assert.equal((await fetch(base+'/api/state')).status,401);
+ const home=await fetch(base+'/',{headers});assert.equal(home.status,200);assert.match(await home.text(),/lang="fa"/);assert.match(home.headers.get('content-security-policy'),/script-src 'self'/);
+ assert.equal((await fetch(base+'/api/state',{headers}).then(r=>r.json())).revision,0);
+ const command={requestId:randomUUID(),revision:0,kind:'receipt',payload:{type:'tube',material:'=TEST()',diameter:60.3,thickness:2,length:6,count:2,remnant:false,location:'A',operator:'tester',document:'R-1',date:'1405/07/16',note:'',order:''}};
+ const post=(body,origin='https://inventory.example.test')=>fetch(base+'/api/commands',{method:'POST',headers:{...headers,'content-type':'application/json',origin},body:JSON.stringify(body)});
+ assert.equal((await post(command,'https://other.example')).status,403);const first=await post(command);assert.equal(first.status,200);const result=await first.json();assert.equal(result.pieceIds.length,2);
+ const retry=await post(command).then(r=>r.json());assert.equal(retry.duplicate,true);assert.equal((await post({...command,requestId:randomUUID()})).status,409);
+ assert.equal((await fetch(base+'/api/request?id='+command.requestId,{headers}).then(r=>r.json())).found,true);
+ const state=await fetch(base+'/api/state',{headers}).then(r=>r.json());assert.equal(state.summary.tube.total,12);const rack=await fetch(base+'/api/rack?id='+encodeURIComponent(state.racks[0].rackId),{headers}).then(r=>r.json());assert.equal(rack.pieces.length,2);
+ const csv=await fetch(base+'/api/export.csv',{headers}).then(r=>r.text());assert.ok(csv.includes("'=TEST()"));assert.ok(csv.includes('T-000001'));
+ const backup=await fetch(base+'/api/backup',{headers});assert.equal(backup.status,200);const backupFile=path.join(dir,'download.sqlite');await fs.writeFile(backupFile,Buffer.from(await backup.arrayBuffer()));const db=new DatabaseSync(backupFile);try{assert.equal(db.prepare('SELECT COUNT(*) n FROM pieces').get().n,2);}finally{db.close();}
+ const date=today(),dataCommand={requestId:randomUUID(),revision:1,kind:'data_request',payload:{date,operator:'project-control',document:'REQUEST-1',note:'warehouse stock needed',scopeType:'tube',scopeLocation:'',project:'JOB',requester:'project-control',supplier:'=WAREHOUSE()',requiredDate:date,requiredTime:'00:00',dueDate:persianDateOf(Date.now()+86400000),dueTime:'23:59',freshnessHours:24}};
+ const created=await post(dataCommand).then(r=>r.json());assert.ok(created.dataRequestId);
+ const list=await fetch(base+'/api/data-requests',{headers}).then(r=>r.json());assert.equal(list.total,1);assert.equal(list.requests[0].notificationPending,true);
+ const detail=await fetch(base+'/api/data-request?id='+created.dataRequestId,{headers}).then(r=>r.json());assert.equal(detail.events.length,1);assert.equal(detail.status,'waiting');
+ const followup=await fetch(base+'/api/data-report.csv',{headers}).then(r=>r.text());assert.ok(followup.includes("'=WAREHOUSE()"));assert.ok(followup.includes('REQUEST-1'));assert.ok(followup.includes('نامشخص'));
+ const qualityCsv=await fetch(base+'/api/export.csv',{headers}).then(r=>r.text());assert.ok(qualityCsv.includes('نیازمند تأیید'));
+ assert.equal((await fetch(base+'/api/data-requests')).status,401);assert.equal((await fetch(base+'/api/data-request?id=missing',{headers})).status,404);
+ assert.equal((await fetch(base+'/api/not-a-route',{headers})).status,404);assert.equal((await fetch(base+'/server.mjs',{headers})).status,404);
+});
+test('network binding requires login credentials',async()=>{
+ const child=spawn(process.execPath,['server.mjs'],{cwd,env:{...process.env,RAMNOOR_HOST:'0.0.0.0',RAMNOOR_ACCOUNTS_JSON:'',RAMNOOR_AUTH_USER:'',RAMNOOR_AUTH_PASSWORD:''},stdio:['ignore','ignore','pipe']});let error='';child.stderr.on('data',b=>error+=b);const [code]=await once(child,'exit');assert.notEqual(code,0);assert.match(error,/Configure authentication/);
+});
+test('HTTP enforces warehouse response versus project review and records authenticated role',async t=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'rn-roles-')),accounts=[{username:'wh',password:'warehouse-test-only',role:'warehouse',displayName:'مسئول انبار'},{username:'pc',password:'project-test-only',role:'project_control',displayName:'کنترل پروژه'}];
+ const child=spawn(process.execPath,['server.mjs'],{cwd,env:{...process.env,RAMNOOR_HOST:'127.0.0.1',PORT:'0',RAMNOOR_DB_PATH:path.join(dir,'inventory.sqlite'),RAMNOOR_ACCOUNTS_JSON:JSON.stringify(accounts),PUBLIC_ORIGIN:'https://inventory.example.test'},stdio:['ignore','pipe','pipe']});
+ t.after(async()=>{if(child.exitCode===null){const ended=once(child,'exit');child.kill();await ended;}await fs.rm(dir,{recursive:true,force:true});});
+ let logs='';child.stderr.on('data',b=>logs+=b);const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(logs)),10000);child.once('exit',()=>{clearTimeout(timer);reject(new Error(logs));});child.stdout.on('data',b=>{const m=b.toString().match(/http:\/\/[^\s]+/);if(m){clearTimeout(timer);resolve(m[0].replace(/\/$/,''));}});});
+ const headers=who=>({authorization:'Basic '+Buffer.from(who.username+':'+who.password).toString('base64'),'content-type':'application/json',origin:'https://inventory.example.test'}),date=today();
+ const post=(who,kind,payload,revision)=>fetch(base+'/api/commands',{method:'POST',headers:headers(who),body:JSON.stringify({requestId:randomUUID(),revision,kind,payload:{date,operator:who.displayName,document:'DOC',note:'',...payload}})});
+ const request={scopeType:'tube',scopeLocation:'',requester:'کنترل پروژه',supplier:'مسئول انبار',project:'P',requiredDate:date,requiredTime:'00:00',dueDate:persianDateOf(Date.now()+86400000),dueTime:'23:59',freshnessHours:24};
+ assert.equal((await post(accounts[0],'data_request',request,0)).status,403);const created=await post(accounts[1],'data_request',request,0).then(r=>r.json());assert.ok(created.dataRequestId);
+ const response={dataRequestId:created.dataRequestId,responseStatus:'received',respondent:'مسئول انبار',evidenceRef:'COUNT-1',asOfDate:date,asOfTime:'00:00',completeConfirmed:true,zeroConfirmed:true};
+ assert.equal((await post(accounts[1],'data_response',response,1)).status,403);assert.equal((await post(accounts[0],'data_response',response,1)).status,200);assert.equal((await post(accounts[0],'data_verify',{dataRequestId:created.dataRequestId,reviewConfirmed:true},2)).status,403);assert.equal((await post(accounts[1],'data_verify',{dataRequestId:created.dataRequestId,reviewConfirmed:true},2)).status,200);
+ const detail=await fetch(base+'/api/data-request?id='+created.dataRequestId,{headers:headers(accounts[1])}).then(r=>r.json());assert.equal(detail.events[0].actor,'pc');assert.equal(detail.events[0].payload.actorRole,'project_control');assert.equal(detail.events[1].actor,'wh');assert.equal(detail.events[1].payload.actorRole,'warehouse');
+ const session=await fetch(base+'/api/session',{headers:headers(accounts[0])}).then(r=>r.json());assert.equal(session.role,'warehouse');assert.equal(session.individualAccounts,true);assert.equal(session.password,undefined);
+});

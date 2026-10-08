@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="کنترل تصویری موجودی لوله، ورق و پروفیل رام نور">
+  <title>موجودی مواد اولیه رام نور</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+<div id="rn-material-demo">
+  <header class="rn-head"><div class="rn-brand"><span class="rn-logo" aria-hidden="true">RN</span><div><div class="rn-small">رام نور / انبار مواد اولیه</div><h2>موجودی به شکل قطعه</h2></div></div><span class="rn-tag" id="connection">در حال اتصال</span></header>
+  <main class="rn-body">
+    <div class="rn-small" id="rn-session"></div>
+    <div class="rn-toolbar">
+      <nav class="rn-tabs" aria-label="نوع موجودی">
+        <button class="rn-button" type="button" data-action="category" data-category="all" aria-pressed="true">همه</button>
+        <button class="rn-button" type="button" data-action="category" data-category="tube" aria-pressed="false">لوله</button>
+        <button class="rn-button" type="button" data-action="category" data-category="sheet" aria-pressed="false">ورق</button>
+        <button class="rn-button" type="button" data-action="category" data-category="profile" aria-pressed="false">پروفیل</button>
+        <button class="rn-button" type="button" data-action="history">سوابق</button>
+        <button class="rn-button" type="button" data-action="tracking">کیفیت داده و پیگیری</button>
+      </nav>
+      <div class="rn-actions" style="margin:0"><button class="rn-button" type="button" data-action="refresh">بازخوانی</button><button class="rn-button primary" type="button" data-action="add">＋ ثبت ورود</button></div>
+    </div>
+    <div class="rn-sync" id="sync-note" aria-live="polite"></div>
+    <div id="rn-data-banner" aria-live="polite"></div>
+    <div class="rn-stats" id="rn-stats"></div>
+    <div class="rn-tools"><label class="rn-search-label">جستجوی جنس، مکان و ابعاد<input id="search" class="rn-input" type="search" placeholder="مثلاً ۶۰٫۳ یا قفسه A"></label><a class="rn-button" href="/api/export.csv">خروجی CSV</a><a class="rn-button" href="/api/backup">پشتیبان دیتابیس</a></div>
+    <div id="rn-editor"></div>
+    <div id="rn-detail"></div>
+    <div class="rn-legend" id="rn-legend"><span class="rn-key"><span class="rn-dot"></span>آزاد</span><span class="rn-key"><span class="rn-dot reserve"></span>رزرو سفارش</span><span>هر شکل = یک قطعه؛ قطعات هم‌اندازه کنار هم</span></div>
+    <div id="rn-racks"></div>
+    <div id="rn-history" hidden></div>
+    <div id="rn-tracking" hidden></div>
+    <div id="group-pager" class="rn-pager"></div>
+    <div class="rn-message" id="rn-message" role="status" aria-live="polite"></div>
+    <footer class="rn-foot"><span>مقطع و ضخامت: میلی‌متر · طول لوله و پروفیل: متر</span><span>شکل‌ها شماتیک‌اند؛ مقیاس فنی ندارند.</span></footer>
+  </main>
+</div>
+</body>
+</html>
